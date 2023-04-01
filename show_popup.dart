@@ -2,10 +2,15 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'marker_info.dart';
 import 'package:image/image.dart' as img;
 import 'marker_config.dart';
 import 'color_picker.dart';
+import 'package:path/path.dart';
+import 'package:http/http.dart' as http;
+import 'survey_page_state.dart';
 
 List<String> _units = ['㎡', 'm', '箇所', '枚', '本', '㎥', '式', 'その他'];
 List<double> fontSizeList = [
@@ -51,6 +56,7 @@ class ShowPopup extends StatefulWidget {
   final String imageId;
   final Function(File?)? onImageSelected;
   final Map<String, dynamic>? initialValues;
+  final SurveyPageState parent;
 
   ShowPopup({
     required this.onSave,
@@ -64,6 +70,7 @@ class ShowPopup extends StatefulWidget {
     required this.deteriorationDetails,
     this.onImageSelected,
     this.initialValues,
+    required this.parent,
   });
 
   @override
@@ -77,8 +84,11 @@ class _ShowPopupState extends State<ShowPopup> {
   String? selectedDeterioration;
   String? selectedUnit;
   String? imageId;
+  String imageUrl = "";
   File? _tempImageFile;
+  File? _displayImageFile;
   String? downloadUrl;
+  String? markerId;
   TextEditingController? customLocationController;
   TextEditingController? customPartController;
   TextEditingController? customFinishingController;
@@ -86,9 +96,9 @@ class _ShowPopupState extends State<ShowPopup> {
   TextEditingController? customUnitController;
   TextEditingController? quantityController;
   Color selectedTextColor = Colors.black;
-  Color selectedBackgroundColor = Color.fromARGB(126, 244, 67, 54);
-  Color selectedBorderColor = Colors.black;
-  double selectedFontSize = 14.0;
+  Color selectedBackgroundColor = Color(0xffff5722);
+  Color selectedBorderColor = Color(0xffff5722);
+  double selectedFontSize = 20.0;
   bool _isInputComplete() {
     return selectedLocation != null &&
         selectedPart != null &&
@@ -110,6 +120,10 @@ class _ShowPopupState extends State<ShowPopup> {
         ((selectedUnit == 'その他' && customUnitController!.text.isNotEmpty) ||
             (selectedUnit != 'その他'));
   }
+
+  FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  FirebaseStorage _storage = FirebaseStorage.instance;
+  late SurveyPageState parent;
 
   @override
   void initState() {
@@ -135,18 +149,18 @@ class _ShowPopupState extends State<ShowPopup> {
     quantityController = TextEditingController(
         text: widget.initialValues?['quantity']?.toString());
     selectedTextColor =
-        widget.initialValues?['selectedTextColor'] as Color? ?? Colors.black;
+        widget.initialValues?['text_color'] as Color? ?? Colors.black;
     selectedBackgroundColor =
-        widget.initialValues?['selectedBackgroundColor'] as Color? ??
-            Color.fromARGB(126, 244, 67, 54);
-    selectedBorderColor =
-        widget.initialValues?['selectedBorderColor'] as Color? ?? Colors.black;
-    selectedFontSize =
-        widget.initialValues?['selectedFontSize'] as double? ?? 14.0;
-    print('Initial Text Color: $selectedTextColor');
-    print('Initial Background Color: $selectedBackgroundColor');
-    print('Initial Border Color: $selectedBorderColor');
-    print('Initial Font Size: $selectedFontSize');
+        widget.initialValues?['background_color'] as Color? ??
+            Color(0xffff5722);
+    selectedBorderColor = widget.initialValues?['background_color'] as Color? ??
+        Color(0xffff5722);
+    selectedFontSize = widget.initialValues?['font_size'] as double? ?? 20.0;
+    markerId = widget.initialValues?['id'];
+    imageUrl = widget.initialValues?['image_url'] ?? '';
+    if (imageUrl.isNotEmpty) {
+      _setImageFromUrl(imageUrl);
+    }
   }
 
   @override
@@ -167,25 +181,52 @@ class _ShowPopupState extends State<ShowPopup> {
     return await imageFile.copy(path);
   }
 
-  Future<void> _pickImage(ImageSource source) async {
+  Future<void> _pickImage(BuildContext context, ImageSource source) async {
     final ImagePicker _picker = ImagePicker();
-    final XFile? image = await _picker.pickImage(
-      source: source,
-      maxHeight: 621,
-      maxWidth: 828,
-      imageQuality: 85,
-    );
-
-    if (image != null) {
-      File imageFile = File(image.path);
-      File resizedImageFile = await _resizeImage(imageFile);
-      File localImage = await _saveImageLocally(resizedImageFile);
-      setState(() {
-        _tempImageFile = localImage;
-        // コールバックを呼び出し
-        widget.onImageSelected?.call(_tempImageFile);
-      });
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: source,
+        maxHeight: 621,
+        maxWidth: 828,
+        imageQuality: 85,
+      );
+      if (image != null) {
+        final String fileExtension = extension(image.path).toLowerCase();
+        if (fileExtension != ".jpg" && fileExtension != ".jpeg") {
+          _handleImageError(context);
+        }
+        File imageFile = File(image.path);
+        File resizedImageFile = await _resizeImage(imageFile);
+        File localImage = await _saveImageLocally(resizedImageFile);
+        setState(() {
+          _tempImageFile = localImage;
+          // コールバックを呼び出し
+          widget.onImageSelected?.call(_tempImageFile);
+        });
+      }
+    } catch (e) {
+      _handleImageError(context);
     }
+  }
+
+  void _handleImageError(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('エラー'),
+          content: Text('画像を読み込めませんでした。選択した画像が破損しているか、サポートされていない形式の可能性があります。'),
+          actions: <Widget>[
+            TextButton(
+              child: Text('閉じる'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<File> _resizeImage(File imageFile) async {
@@ -225,6 +266,22 @@ class _ShowPopupState extends State<ShowPopup> {
       );
     }
     return SizedBox.shrink();
+  }
+
+  Future<void> _setImageFromUrl(String url) async {
+    final response = await http.get(Uri.parse(url));
+    final documentDirectory = await getApplicationDocumentsDirectory();
+    final file = File(
+        '${documentDirectory.path}/${DateTime.now().toIso8601String()}.jpg');
+    await file.writeAsBytes(response.bodyBytes);
+    setState(() {
+      _displayImageFile = file;
+    });
+  }
+
+  Future<void> _deleteMarker(id) async {
+    print('showpopup: $markerId');
+    widget.parent.deleteMarkerImage(id!);
   }
 
   @override
@@ -324,23 +381,83 @@ class _ShowPopupState extends State<ShowPopup> {
               }).toList(),
             ),
             _customFieldIfOther(customUnitController, selectedUnit),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                IconButton(
-                  onPressed: () async {
-                    await _pickImage(ImageSource.camera);
-                  },
-                  icon: Icon(Icons.camera_alt),
-                ),
-                IconButton(
-                  onPressed: () async {
-                    await _pickImage(ImageSource.gallery);
-                  },
-                  icon: Icon(Icons.photo_library),
-                ),
-              ],
-            ),
+            if (_tempImageFile == null || _displayImageFile == null)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  IconButton(
+                    onPressed: () async {
+                      await _pickImage(context, ImageSource.camera);
+                    },
+                    icon: Icon(Icons.camera_alt),
+                  ),
+                  IconButton(
+                    onPressed: () async {
+                      await _pickImage(context, ImageSource.gallery);
+                    },
+                    icon: Icon(Icons.photo_library),
+                  ),
+                ],
+              ),
+            if (_displayImageFile != null || _tempImageFile != null)
+              Column(
+                children: [
+                  GestureDetector(
+                    onTap: () {
+                      showDialog(
+                        context: context,
+                        builder: (BuildContext context) {
+                          return AlertDialog(
+                            content: _tempImageFile != null
+                                ? Image.file(_tempImageFile!)
+                                : Image.network(imageUrl),
+                            actions: <Widget>[
+                              TextButton(
+                                child: Text('閉じる'),
+                                onPressed: () {
+                                  Navigator.of(context).pop();
+                                },
+                              ),
+                            ],
+                          );
+                        },
+                      );
+                    },
+                    child: Text(
+                      _tempImageFile != null
+                          ? basename(_tempImageFile!.path)
+                          : basename(_displayImageFile!.path),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () async {
+                      if (_tempImageFile != null) {
+                        setState(() {
+                          widget.onImageSelected?.call(null);
+                          _tempImageFile = null;
+                          _displayImageFile = null;
+                          imageUrl = "";
+                        });
+                        print('_tempImageFile if: $_tempImageFile');
+                        print('_displayImageFile if: $_displayImageFile');
+                      } else {
+                        print('onPressed else: $_tempImageFile');
+                        Reference oldImageRef = _storage.refFromURL(imageUrl);
+                        await oldImageRef.delete();
+                        setState(() {
+                          imageUrl = "";
+                          _displayImageFile = null;
+                          _tempImageFile = null;
+                          _deleteMarker(markerId);
+                        });
+                        print('_tempImageFile else: $_tempImageFile');
+                        print('_displayImageFile else: $_displayImageFile');
+                      }
+                    },
+                    icon: Icon(Icons.delete),
+                  ),
+                ],
+              ),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -420,6 +537,7 @@ class _ShowPopupState extends State<ShowPopup> {
                                 setState(() {
                                   selectedBackgroundColor = color;
                                 });
+                                print('選択された色: $color');
                               },
                             ),
                           ),
