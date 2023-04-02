@@ -6,7 +6,6 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'marker_info.dart';
 import 'package:image/image.dart' as img;
-import 'marker_config.dart';
 import 'color_picker.dart';
 import 'package:path/path.dart';
 import 'package:http/http.dart' as http;
@@ -56,7 +55,6 @@ class ShowPopup extends StatefulWidget {
   final String imageId;
   final Function(File?)? onImageSelected;
   final Map<String, dynamic>? initialValues;
-  final SurveyPageState parent;
 
   ShowPopup({
     required this.onSave,
@@ -70,7 +68,6 @@ class ShowPopup extends StatefulWidget {
     required this.deteriorationDetails,
     this.onImageSelected,
     this.initialValues,
-    required this.parent,
   });
 
   @override
@@ -123,7 +120,6 @@ class _ShowPopupState extends State<ShowPopup> {
 
   FirebaseFirestore _firestore = FirebaseFirestore.instance;
   FirebaseStorage _storage = FirebaseStorage.instance;
-  late SurveyPageState parent;
 
   @override
   void initState() {
@@ -279,11 +275,6 @@ class _ShowPopupState extends State<ShowPopup> {
     });
   }
 
-  Future<void> _deleteMarker(id) async {
-    print('showpopup: $markerId');
-    widget.parent.deleteMarkerImage(id!);
-  }
-
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -381,7 +372,7 @@ class _ShowPopupState extends State<ShowPopup> {
               }).toList(),
             ),
             _customFieldIfOther(customUnitController, selectedUnit),
-            if (_tempImageFile == null || _displayImageFile == null)
+            if (_displayImageFile == null && _tempImageFile == null)
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
@@ -423,36 +414,36 @@ class _ShowPopupState extends State<ShowPopup> {
                         },
                       );
                     },
-                    child: Text(
-                      _tempImageFile != null
-                          ? basename(_tempImageFile!.path)
-                          : basename(_displayImageFile!.path),
-                    ),
+                    child: Text(_tempImageFile != null
+                        ? basename(_tempImageFile!.path)
+                        : basename(_displayImageFile!.path)),
                   ),
                   IconButton(
                     onPressed: () async {
-                      if (_tempImageFile != null) {
-                        setState(() {
-                          widget.onImageSelected?.call(null);
-                          _tempImageFile = null;
-                          _displayImageFile = null;
-                          imageUrl = "";
-                        });
-                        print('_tempImageFile if: $_tempImageFile');
-                        print('_displayImageFile if: $_displayImageFile');
-                      } else {
-                        print('onPressed else: $_tempImageFile');
-                        Reference oldImageRef = _storage.refFromURL(imageUrl);
+                      if (widget.initialValues?['image_url'] != null) {
+                        Reference oldImageRef = _storage
+                            .refFromURL(widget.initialValues?['image_url']);
                         await oldImageRef.delete();
-                        setState(() {
-                          imageUrl = "";
-                          _displayImageFile = null;
-                          _tempImageFile = null;
-                          _deleteMarker(markerId);
-                        });
-                        print('_tempImageFile else: $_tempImageFile');
-                        print('_displayImageFile else: $_displayImageFile');
+                        QuerySnapshot snapshot = await FirebaseFirestore
+                            .instance
+                            .collection('deteriorationDetails')
+                            .where('id', isEqualTo: widget.initialValues?['id'])
+                            .get();
+                        if (snapshot.docs.isNotEmpty) {
+                          DocumentReference docRef =
+                              snapshot.docs.first.reference;
+                          await docRef
+                              .update({"image_url": FieldValue.delete()});
+                        }
+                        widget.initialValues?['image_url'] = null;
                       }
+                      setState(() {
+                        widget.onImageSelected?.call(null);
+                        imageUrl = "";
+                        _displayImageFile = null;
+                        _tempImageFile = null;
+                        // _deleteMarker(markerId);
+                      });
                     },
                     icon: Icon(Icons.delete),
                   ),
@@ -537,7 +528,6 @@ class _ShowPopupState extends State<ShowPopup> {
                                 setState(() {
                                   selectedBackgroundColor = color;
                                 });
-                                print('選択された色: $color');
                               },
                             ),
                           ),
