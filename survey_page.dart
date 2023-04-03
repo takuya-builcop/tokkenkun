@@ -8,6 +8,7 @@ class SurveyPage extends StatefulWidget {
   final String surveyId;
   final String drawingId;
   bool? currentInternetEnvironment = false;
+  final String surveyType;
 
   SurveyPage({
     required this.imagePath,
@@ -15,6 +16,7 @@ class SurveyPage extends StatefulWidget {
     required this.imageName,
     required this.surveyId,
     required this.drawingId,
+    required this.surveyType,
   });
 
   @override
