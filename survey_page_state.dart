@@ -16,6 +16,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter/services.dart';
 
 class SurveyPageState extends State<SurveyPage> {
   late Image _image;
@@ -43,6 +44,7 @@ class SurveyPageState extends State<SurveyPage> {
   User? _currentUser;
   String? pageName;
   bool? currentInternetEnvironment = false;
+  List<Map<String, String>> data = [];
 
   void _onPopupCancel() {
     setState(() {
@@ -72,9 +74,10 @@ class SurveyPageState extends State<SurveyPage> {
     });
     _getDrowing();
     _fetchCurrentUser();
-    _fetchDataFromFirestore();
     _fetchDeteriorationDetails();
     _getUserInternet();
+    widget.surveyType == '特殊建築物定期調査' ? _loadJson() : _fetchDataFromFirestore();
+    print(locations);
   }
 
   Future<void> _fetchCurrentUser() async {
@@ -83,6 +86,25 @@ class SurveyPageState extends State<SurveyPage> {
       setState(() {
         _currentUser = user;
       });
+    }
+  }
+
+  Future<void> _loadJson() async {
+    try {
+      String jsonString = await rootBundle.loadString('assets/surveyitem.json');
+      final jsonResponse = json.decode(jsonString) as List<dynamic>;
+
+      data = jsonResponse
+          .map((item) => {
+                "Part": item['Part'] as String,
+                "Condition": item['Condition'] as String,
+                "Location": item['Location'] as String,
+              })
+          .toList();
+
+      locations = data.map((item) => item['Location']!).toSet().toList();
+    } catch (e) {
+      print('Error: $e');
     }
   }
 
